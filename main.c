@@ -27,6 +27,7 @@
  * 
  ******************************************************************************/
 
+// Bits de configuracao
 #pragma config FOSC = XT          // Oscillator Selection bits
 #pragma config WDTE = OFF         // Watchdog Timer Enable bit (WDT enabled)
 #pragma config PWRTE = OFF        // Power-up Timer Enable bit (PWRT disabled)
@@ -50,18 +51,28 @@
 #define DISPLAY2        PORTDbits.RD5
 #define DISPLAY3        PORTDbits.RD6
 #define DISPLAY4        PORTDbits.RD7
-#define POWER_LED       PORTDbits.RD0
+#define OP_MODE         PORTDbits.RD1
 
 // Define SW0, SW1 como variaveis de entrada usando RC2 e RC3 da PORTC
-#define SW0             PORTCbits.RC2
-#define SW1             PORTCbits.RC3
+#define SW0             PORTCbits.RC0
+#define SW1             PORTCbits.RC1
+#define SW2             PORTCbits.RC2
+#define SW3             PORTCbits.RC3
+#define SW4             PORTDbits.RD0
 
 // Define freq do oscilador em 20Mhz
 #define _XTAL_FREQ      20000000
 
 // Prototipos das funcoes utilizadas
 void cdisplay();
-void sel_bcd_output(uint16_t cwait, uint8_t preg, uint16_t pit);
+void mux_display(uint8_t pdisp);
+void chk_passwd(uint8_t* breg, uint8_t* preg);
+void disp_error(uint8_t* breg);
+void disp_success(uint8_t* breg);
+void clearreg(uint8_t* breg);
+void iohandler(uint8_t* bus, uint8_t* preg, uint8_t* nreg, uint8_t* flag);
+void bcd_output(uint8_t* value, uint8_t cwait, uint8_t preg, uint8_t pit);
+
 
 int main(void)
 {
@@ -69,42 +80,174 @@ int main(void)
     ANSELH      = 0;              // Define I/O digital da PORTB
     TRISB       = 0;              // Define PORTB Output
     TRISD       = 0;              // Define PORTD Output
-    PORTB       = 0x00;           // Inicia PORTB com 0x00
-    POWER_LED   = 1;              // Define LED em RD0 sempre aceso
+    PORTB       = 0;              // Inicia PORTB com 0x00
     C1ON        = 0;              // Desliga comparador C1
     C2ON        = 0;              // Desliga comparador C2
     
-    TRISDbits.TRISD2 = 1;         // Define RD2 da PORTD Input
-    TRISDbits.TRISD3 = 1;         // Define RD3 da PORTD Input
+    TRISCbits.TRISC0 = 1;         // Define RC0 da PORTC Input
+    TRISCbits.TRISC1 = 1;         // Define RC1 da PORTC Input
+    TRISCbits.TRISC2 = 1;         // Define RC2 da PORTC Input
+    TRISCbits.TRISC3 = 1;         // Define RC3 da PORTC Input
+    TRISDbits.TRISD0 = 1;         // Define RD0 da PORTD Input
     
-    uint16_t pit   = 1000;
-    uint16_t ccall = 0;
-    uint8_t  preg  = 0;
-    uint8_t  flag  = 1;
-    
-    
-    for (;;) {
-        PORTB = 0xFE;
-        
-        sel_bcd_output(ccall, preg, pit);
+    uint8_t pit   = 200;          // Iteracoes de ociosidade
+    uint8_t ccall = 0;            // Contador de iteracoes
+    uint8_t preg  = 0;            // Apontador de registro
+    uint8_t nreg  = 4;            // Apontador de registro
+    uint8_t flag  = 1;            // Registra atuacao de botao 
        
-        if (SW0 == 1 && flag == 1) {
-            __delay_us(20);
-            if (SW0 == 1) {
-                preg = (preg == 3) ? 0U : preg + 1U;
-                flag = 0;
-            }
+    // Registrador onde sao armazenados os digitos fornecidos pelo usuario
+    // uint8_t  bus_register[4] = {0x0A, 0x0A, 0x0A, 0x0A};
+    uint8_t  bus_register[4] = {0x09, 0x05, 0x08, 0x03};
+            
+    for (;;) {
+        // Inicia displays
+        bcd_output(bus_register, ccall, preg, pit);
+        
+        // Aguarda pelos comandos de entrada
+        iohandler(bus_register, &preg, &nreg, &flag);
+        
+        if (preg == 4 || nreg == 4) {
+            chk_passwd(bus_register, &preg);
+            if (!OP_MODE) nreg = 0;
         }
         
-        if (SW0 == 0 && flag == 0) {
-                flag = 1;
-            }
+        OP_MODE = SW4;
         
-        ccall = (ccall > pit) ? 0 : ccall + 1;
+        // Alterna entre modos de operacao. 0x00 modo simples 0x01 modo avancado
+        preg    = OP_MODE ? preg : 0U;
+        
+        // Incrementa contador ate que atinja 'pit' iteracoes
+        ccall   = (ccall > pit) ? 0U : ccall + 1U;
     }
 }
 
-// Para limpar os displays, injetamos 5V no anodo comum
+void chk_passwd(uint8_t* breg, uint8_t* preg) {
+    uint8_t i;
+    uint8_t passwd[] = {0x09, 0x05, 0x08, 0x03};
+    
+    for (i = 0; i < 4; ++i) {
+        if (*(breg + i) != passwd[i]) {
+            goto error;                   
+        }
+    }
+
+    // Mostra mensagem de sucesso, pula instancia de tratamento de erro
+    disp_success(breg); goto pass;
+
+    // Usuario inseriu senha incorreta
+    error: disp_error(breg);
+
+    // Se estiver no modo avancado, reseta o apontador de registro
+    pass : if (OP_MODE) *preg = 0;
+}
+
+void disp_success(uint8_t* breg)
+{
+    uint8_t i;
+   
+    for (i = 0; i < 4; ++i)
+    {
+        *breg = 0xFF;
+        breg++;
+    }
+}
+
+void disp_error(uint8_t* breg)
+{
+    uint8_t i;
+   
+    for (i = 0; i < 4; ++i)
+    {
+        *breg = 0x00;
+        breg++;
+    }   
+}
+
+void key_fwd(uint8_t* bus, uint8_t pos)
+{
+    if (bus[pos] >= 9) {
+        bus[pos] = 0x00;
+    } else {
+        bus[pos] += 1;
+    }
+}
+
+void clearreg(uint8_t* breg)
+{
+    uint8_t i;
+
+    for (i = 0; i < 4; ++i) {
+        *breg = 0x0A;
+        breg++;
+    }
+}
+
+// Lida com entradas e saidas
+void iohandler(uint8_t* bus, uint8_t* preg, uint8_t* nreg, uint8_t* flag)
+{
+    if (SW2 == 1U && *flag == 1) {
+        __delay_us(50);
+        if (SW2 == 1) {
+            key_fwd(bus, *preg);
+            *flag = 0;
+        }
+    }    
+    
+    if (SW3 == 1U && *flag == 1) {
+        __delay_us(50);
+        if (SW3 == 1) {
+            clearreg(bus);
+            *preg = 0;
+            *flag = 0;
+            *nreg = 0;
+        }
+    }
+    
+    if (SW0 == 0 && SW1 == 0 && SW2 == 0  && SW3 == 0 && *flag == 0) {
+        *flag = 1U;
+    }
+    
+    uint8_t pp;
+    
+    switch ( OP_MODE ) {
+        case 0:
+            if (SW0 == 1U && *flag == 1) {
+                
+                __delay_us(50);
+                if (SW0 == 1) {
+                    
+                    for (pp = 3; pp >= 1; --pp) {
+                        if (*nreg < 3)
+                            bus[pp] = bus[pp - 1];
+                    }
+
+                    *nreg += 1;
+                    *flag = 0;
+                }
+            }
+            break;
+        case 1:
+            if (SW0 == 1U && *flag == 1) {
+                __delay_us(50);
+                if (SW0 == 1) {
+                    *preg = (*preg > 3) ? 0U : *preg + 1U;
+                    *flag = 0;     
+                }
+            }
+            
+            if (SW1 == 1U && *flag == 1) {
+                __delay_us(50);
+                if (SW1 == 1) {
+                    *preg = (*preg == 0) ? 3U : *preg - 1U;
+                    *flag = 0;     
+                }
+            }
+            break;
+    }
+}
+
+// Limpa os displays. Injeta-se 5V no anodo comum
 void cdisplay()
 {
     DISPLAY1 = 1;
@@ -115,59 +258,108 @@ void cdisplay()
 
 /*
  * Realiza multiplexacao dos displays. Pisca o display que esta atualmente sele-
- * cionado.
+ * cionado. Exibe valor fornecido em 'value'. Apresenta 3 opcoes de funcionamen-
+ * to para o display: 0xFF -> Mensagem de sucess; 0xF7 -> Mensagem de erro e
+ * para qualquer outro 'value' exibe o decimal correspondente.
  * @args: cwait : contador de periodo de descanso
  *        preg  : apontador para o atual display selecionado
  *        pit   : numero de iteracoes de osciosidade
  */
-void sel_bcd_output(uint16_t cwait, uint8_t preg, uint16_t pit) 
+void bcd_output(uint8_t* value, uint8_t cwait, uint8_t preg, uint8_t pit)
 {
     uint8_t pdisp;
-    // uint8_t cnum_bcd_7seg = {0x01, 0x4F, 0x12, 0x06, 0x4C, 0x24, 0x20, 0x0F,
-    // 0x00, 0x04};
+    uint16_t sbus;
+    uint8_t func = *value;
+    uint8_t num_bcd_7seg[]  = { 0x01, 0x4F, 0x12, 0x06, 0x4C, 0x24, 0x20, 0x0F, 
+                                0x00, 0x04, 0xFE };
+    uint8_t num_pass_7seg[] = { 0x18, 0x4F, 0x31, 0x4F, 0x20, 0x38, 0x00, 0x00,
+                                0x0F, 0x7F, 0x7F, 0x7F};
+    uint8_t num_erro_7seg[] = { 0x30, 0x7A, 0x7A, 0x01};
+    uint8_t aux_bus[4]      = {0x18, 0x7F, 0x7F, 0x7F};
+    uint8_t t;
+    uint8_t pr = 0, li = 0;
     
     // Bloco responsavel pela multiplexacao dos displays de 7 segmentos.
     // As saidas sao configuradas para intercambiar entre regioes de corte
     // e saturacao de 4 TBJs tipo PNP com funcao de ativar e desativar o
-    // anodo comum de cada display com periodo de 1 ms.
-    for (pdisp = 0; pdisp < 4; ++pdisp) {
+    // anodo comum de cada display com periodo de 500 us.
+    
+    switch(func) {
+        case 0xFF:
+            for (sbus = 0; sbus < 100*12; ++sbus) {
+                if (SW3 == 1) break;
+                if (pr > 100) {
+                    li++;
+                    if (li >= 12) li = 0;
+                    pr = 0;
+                    
+                    for (t = 3; t >= 1; --t) {
+                        aux_bus[t] = aux_bus[t - 1U];
+                    }
+                    aux_bus[0] = num_pass_7seg[li];
+                }
+
+                for (pdisp = 0; pdisp < 4; ++pdisp) {
+                    PORTB = aux_bus[pdisp];
+                    mux_display(pdisp);
+                    __delay_us(500);
+                }
+                pr++;
+            }
+
+            break;
+        case 0xF7:
+            break;
+        default:
+            for (pdisp = 0; pdisp < 4; ++pdisp) {
         
-        // Para piscar o display selecionado, pula-se o conjunto de instrucoes
-        // ate o proximo descanso de 1 ms, 'wait'. 'preg' eh o apontador do
-        // display selecionado
-        if (cwait < (pit / 2U) && preg == pdisp) {
-            goto wait;            
+                PORTB = num_bcd_7seg[*value];
+
+                // Incrementa endereco para o proximo conteudo do registrador
+                *value++;
+
+                // Para piscar o display selecionado, pula-se o conjunto de ins-
+                // trucoes ate o proximo descanso de 500 us, 'wait'. 'preg' eh o
+                // apontador do display selecionado.
+                if (cwait < (pit / 2U) && preg == pdisp) {
+                    goto wait;            
+                }
+
+                mux_display(pdisp);
+
+                wait:
+                    __delay_us(500);        // Aguarda periodo de 500 us
+                    cdisplay();             // Limpa displays
         }
-        
-        switch ( pdisp ) {
-            case 0:
-                DISPLAY1 = 0;
-                DISPLAY2 = 1;
-                DISPLAY3 = 1; 
-                DISPLAY4 = 1;
-                break;
-            case 1:
-                DISPLAY1 = 1;
-                DISPLAY2 = 0;
-                DISPLAY3 = 1;
-                DISPLAY4 = 1;
-                break; 
-            case 2:
-                DISPLAY1 = 1;
-                DISPLAY2 = 1;
-                DISPLAY3 = 0;
-                DISPLAY4 = 1;
-                break; 
-            case 3:
-                DISPLAY1 = 1;
-                DISPLAY2 = 1;
-                DISPLAY3 = 1;
-                DISPLAY4 = 0;
-                break;                   
-        }
-        
-        wait: 
-            __delay_ms(1);        // Aguarda periodo de 1 ms
-            cdisplay();           // Limpa displays
+            break;
+    }
+}
+
+void mux_display(uint8_t pdisp) {
+    switch ( pdisp ) {
+        case 0:
+            DISPLAY1 = 0;
+            DISPLAY2 = 1;
+            DISPLAY3 = 1; 
+            DISPLAY4 = 1;
+            break;
+        case 1:
+            DISPLAY1 = 1;
+            DISPLAY2 = 0;
+            DISPLAY3 = 1;
+            DISPLAY4 = 1;
+            break; 
+        case 2:
+            DISPLAY1 = 1;
+            DISPLAY2 = 1;
+            DISPLAY3 = 0;
+            DISPLAY4 = 1;
+            break; 
+        case 3:
+            DISPLAY1 = 1;
+            DISPLAY2 = 1;
+            DISPLAY3 = 1;
+            DISPLAY4 = 0;
+            break;                   
     }
 }
