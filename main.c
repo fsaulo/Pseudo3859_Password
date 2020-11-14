@@ -322,13 +322,13 @@ void bcd_output(uint8_t* value, uint8_t cwait, uint8_t preg, uint8_t pit)
         // Envia para os displays a palavra PIC16F887, realiza a multiplexacao
         // entre os displays e desloca cada letra para direta
         case 0xFF:
-            for (sbus = 0; sbus < 50*12; ++sbus) {
+            for (sbus = 0; sbus < 100*12; ++sbus) {
                 if (SW3 == 1) break;
                 
                 // Conta 50 periodos de 800 us e desloca o conteudo da bus auxi-
                 // liar para esquerda. A primeira posicao da bus recebe uma le-
                 // tra da palavra PIC16F887 de acordo com o apontador de posicao
-                if (pr > 50) {
+                if (pr > 100) {
                     li++;
                     if (li >= 12) li = 0;
                     pr = 0;
