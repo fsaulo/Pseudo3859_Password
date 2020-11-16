@@ -64,8 +64,9 @@
 
 // Prototipos das funcoes utilizadas
 void cdisplay();
+void alert();
 void mux_display(uint8_t pdisp);
-void chk_passwd(uint8_t* breg, uint8_t* preg);
+void chk_passwd(uint8_t* breg, uint8_t* preg, uint8_t* cerro);
 void disp_error(uint8_t* breg);
 void disp_success(uint8_t* breg);
 void clearreg(uint8_t* breg);
@@ -94,6 +95,7 @@ int main(void)
     uint8_t preg  = 0;            // Apontador de registro
     uint8_t nreg  = 0;            // Apontador de registro
     uint8_t flag  = 1;            // Registra atuacao de botao
+    uint8_t cerro = 0;            // Contagem de entradas invalidas
 
     // Registrador onde sao armazenados os digitos fornecidos pelo usuario
     uint8_t  bus_register[4] = {0x0A, 0x0A, 0x0A, 0x0A};
@@ -106,21 +108,19 @@ int main(void)
         iohandler(bus_register, &preg, &nreg, &flag);
 
         if (preg == 4 || nreg == 4) {
-            chk_passwd(bus_register, &preg);
-            if (!OP_MODE) nreg = 0;
+            chk_passwd(bus_register, &preg, &cerro);
+            if (!SW4) nreg = 0;
         }
 
-        OP_MODE = SW4;
-
         // Alterna entre modos de operacao. 0x00 modo simples 0x01 modo avancado
-        preg    = OP_MODE ? preg : 0U;
+        preg    = SW4 ? preg : 0U;
 
         // Incrementa contador ate que atinja 'pit' iteracoes
         ccall   = (ccall > pit) ? 0U : ccall + 1U;
     }
 }
 
-void chk_passwd(uint8_t* breg, uint8_t* preg) {
+void chk_passwd(uint8_t* breg, uint8_t* preg, uint8_t* cerro) {
     uint8_t i;
     uint8_t passwd[] = {0x09, 0x05, 0x08, 0x03};
 
@@ -134,10 +134,15 @@ void chk_passwd(uint8_t* breg, uint8_t* preg) {
     disp_success(breg); goto pass;
 
     // Usuario inseriu senha incorreta
-    error: disp_error(breg);
+    error: disp_error(breg); (*cerro)++;
+    if (*cerro == 3) {
+        alert();
+        clearreg(breg);
+        *cerro = 0U;
+    }
 
     // Se estiver no modo avancado, reseta o apontador de registro
-    pass : if (OP_MODE) *preg = 0;
+    pass : if (SW4) *preg = 0;
 }
 
 // Preenche o registrador com o valor 0xFF, codigo que diz que a mensagem foi
@@ -231,7 +236,7 @@ void iohandler(uint8_t* bus, uint8_t* preg, uint8_t* nreg, uint8_t* flag)
 
     // Verifica se esta atualmente recebendo comandos do tipo avancado ou
     // comandos simplificados
-    switch ( OP_MODE ) {
+    switch ( SW4 ) {
 
         // Modo simplificado: os numeros se deslocam da direita para a esquerda
         // a medida que forem sendo inseridos
@@ -362,6 +367,7 @@ void bcd_output(uint8_t* value, uint8_t cwait, uint8_t preg, uint8_t pit)
                     PORTB = num_erro_7seg[pdisp];
                     sbus++;
                     __delay_us(500);
+
                 }
 
                 // Conta 500 periodos de aproximadamente 500 us e desliga todos
@@ -433,4 +439,10 @@ void mux_display(uint8_t pdisp) {
             DISPLAY4 = 0;
             break;
     }
+}
+
+void alert() {
+    OP_MODE = 1;
+    __delay_ms(5000);
+    OP_MODE = 0;
 }
