@@ -1,3 +1,3 @@
 # Pseudo3859_Password
 
-Simple PIN verification program for PIC16F887.
+Simple PIN verification program for the PIC16F887.
